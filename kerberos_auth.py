@@ -331,7 +331,7 @@ def generate_auth_payload(username, password, nonce, cipher, krb_host_addr):
     print(f'\tClient/Service Session Subkey: {cs_subkey.hex()}')
     print(f'\tAP-REQ Payload: {ap_req_payload.hex()[:20]}...')
     print()
-    print(f'AP-REQ Data:')
+    print('AP-REQ Data:')
     pprint(ap_req_data)
     return ap_req_data, ap_req_payload, cs_key, cs_subkey
 

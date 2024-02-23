@@ -4,38 +4,37 @@ import binascii
 import sys
 
 # Keytab structure from http://www.ioplex.com/utilities/keytab.txt
-  # keytab {
-  #     uint16_t file_format_version;                    /* 0x502 */
-  #     keytab_entry entries[*];
-  # };
+# keytab {
+#     uint16_t file_format_version;                    /* 0x502 */
+#     keytab_entry entries[*];
+# };
 
-  # keytab_entry {
-  #     int32_t size;
-  #     uint16_t num_components;    /* sub 1 if version 0x501 */
-  #     counted_octet_string realm;
-  #     counted_octet_string components[num_components];
-  #     uint32_t name_type;   /* not present if version 0x501 */
-  #     uint32_t timestamp;
-  #     uint8_t vno8;
-  #     keyblock key;
-  #     uint32_t vno; /* only present if >= 4 bytes left in entry */
-  # };
+# keytab_entry {
+#     int32_t size;
+#     uint16_t num_components;    /* sub 1 if version 0x501 */
+#     counted_octet_string realm;
+#     counted_octet_string components[num_components];
+#     uint32_t name_type;   /* not present if version 0x501 */
+#     uint32_t timestamp;
+#     uint8_t vno8;
+#     keyblock key;
+#     uint32_t vno; /* only present if >= 4 bytes left in entry */
+# };
 
-  # counted_octet_string {
-  #     uint16_t length;
-  #     uint8_t data[length];
-  # };
+# counted_octet_string {
+#     uint16_t length;
+#     uint8_t data[length];
+# };
 
-  # keyblock {
-  #     uint16_t type;
-  #     counted_octet_string;
-  # };
+# keyblock {
+#     uint16_t type;
+#     counted_octet_string;
+# };
+
 
 class KeyTab(Structure):
-    structure = (
-        ('file_format_version','H=517'),
-        ('keytab_entry', ':')
-    )
+    structure = (('file_format_version', 'H=517'), ('keytab_entry', ':'))
+
     def fromString(self, data):
         self.entries = []
         Structure.fromString(self, data)
@@ -43,7 +42,7 @@ class KeyTab(Structure):
         while len(data) != 0:
             ktentry = KeyTabEntry(data)
 
-            data = data[len(ktentry.getData()):]
+            data = data[len(ktentry.getData()) :]
             self.entries.append(ktentry)
 
     def getData(self):
@@ -51,11 +50,10 @@ class KeyTab(Structure):
         data = Structure.getData(self)
         return data
 
+
 class OctetString(Structure):
-    structure = (
-        ('len', '>H-value'),
-        ('value', ':')
-    )
+    structure = (('len', '>H-value'), ('value', ':'))
+
 
 class KeyTabContentRest(Structure):
     structure = (
@@ -64,8 +62,9 @@ class KeyTabContentRest(Structure):
         ('vno8', 'B=2'),
         ('keytype', '>H'),
         ('keylen', '>H-key'),
-        ('key', ':')
+        ('key', ':'),
     )
+
 
 class KeyTabContent(Structure):
     structure = (
@@ -73,16 +72,17 @@ class KeyTabContent(Structure):
         ('realmlen', '>h-realm'),
         ('realm', ':'),
         ('components', ':'),
-        ('restdata',':')
+        ('restdata', ':'),
     )
+
     def fromString(self, data):
         self.components = []
         Structure.fromString(self, data)
         data = self['components']
-        for i in range(self['num_components']):
+        for _ in range(self['num_components']):
             ktentry = OctetString(data)
 
-            data = data[ktentry['len']+2:]
+            data = data[ktentry['len'] + 2 :]
             self.components.append(ktentry)
         self.restfields = KeyTabContentRest(data)
 
@@ -95,11 +95,10 @@ class KeyTabContent(Structure):
         data = Structure.getData(self)
         return data
 
+
 class KeyTabEntry(Structure):
-    structure = (
-        ('size','>I-content'),
-        ('content',':', KeyTabContent)
-    )
+    structure = (('size', '>I-content'), ('content', ':', KeyTabContent))
+
 
 # Add your own keys here!
 # Keys are tuples in the form (keytype, 'hexencodedkey')
@@ -114,7 +113,7 @@ keys = [
     (23, 'D9C72A9D116A6BBDD1C8B6B6354C245F'),
     (23, 'd3df5a617f747de64375a6890e6b7462'),
     (23, 'dd3fbd9f346b6f1fb4604138438c5048'),
-    (23, '9820f7d38be14b918865a13d37543f16')
+    (23, '9820f7d38be14b918865a13d37543f16'),
 ]
 
 nkt = KeyTab()
