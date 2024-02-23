@@ -1,23 +1,9 @@
-import asn1tools
+import asn1tools # For ASN1 encoding/decoding
 import datetime
-from functools import cache
+import impacket.krb5.crypto as crypto # For encryption/decryptio
+import scapy.all as scapy # For packet parsing
 
-@cache
-def bytes_to_int(b: bytes) -> int:
-    int_value = 0
-    for i in range(len(b)):
-        int_value = int_value * 256 + int(b[i])
-    return int_value
-
-
-@cache
-def int_to_bytes(number: int) -> bytes:
-    num_bytes = (number.bit_length() + 7) // 8
-    little_endian_bytes = bytearray(num_bytes)
-    for i in range(num_bytes):
-        little_endian_bytes[i] = (number >> (8 * i)) & 0xFF
-    return bytes(little_endian_bytes)[::-1]
-
+from pprint import pprint
 
 MESSAGE_TYPES = {
     0x61: 'Ticket',
@@ -40,67 +26,324 @@ MESSAGE_TYPES = {
     0x7E: 'KRB-ERROR',
 }
 
+ASN1_KRB5 = asn1tools.compile_files('krb5.asn', 'der')
 
-
-as_req_data = b'\x6a\x81\xd0\x30\x81\xcd\xa1\x03\x02\x01\x05\xa2\x03\x02\x01\x0a\xa3\x15\x30\x13\x30\x11\xa1\x04\x02\x02\x00\x80\xa2\x09\x04\x07\x30\x05\xa0\x03\x01\x01\xff\xa4\x81\xa9\x30\x81\xa6\xa0\x07\x03\x05\x00\x40\x81\x00\x10\xa1\x14\x30\x12\xa0\x03\x02\x01\x01\xa1\x0b\x30\x09\x1b\x07\x63\x68\x61\x72\x6c\x69\x65\xa2\x06\x1b\x04\x43\x53\x45\x43\xa3\x19\x30\x17\xa0\x03\x02\x01\x02\xa1\x10\x30\x0e\x1b\x06\x6b\x72\x62\x74\x67\x74\x1b\x04\x43\x53\x45\x43\xa5\x11\x18\x0f\x32\x30\x33\x37\x30\x39\x31\x33\x30\x32\x34\x38\x30\x35\x5a\xa6\x11\x18\x0f\x32\x30\x33\x37\x30\x39\x31\x33\x30\x32\x34\x38\x30\x35\x5a\xa7\x06\x02\x04\x1a\x14\x2c\x03\xa8\x15\x30\x13\x02\x01\x12\x02\x01\x11\x02\x01\x17\x02\x01\x18\x02\x02\xff\x79\x02\x01\x03\xa9\x1d\x30\x1b\x30\x19\xa0\x03\x02\x01\x14\xa1\x12\x04\x10\x44\x45\x53\x4b\x54\x4f\x50\x2d\x56\x49\x34\x33\x39\x36\x42\x20'
-as_req_template = {
-    'pvno': 5,
+AS_REQ_TEMPLATE = {
     'msg-type': 10,
     'padata':
     [
         {
-            'padata-type': 128,
+            'padata-type': 2, # pA-ENC-TIMESTAMP
+            'padata-value':
+            {
+                'cipher': # Encrypted with the client's key T=1
+                {
+                    'patimestamp': datetime.datetime.now(),
+                },
+                'etype': 23
+            }
+        },
+        {
+            'padata-type': 128, # PA-DATA pA-PAC-REQUEST
             'padata-value': b'0\x05\xa0\x03\x01\x01\xff'
         }
     ],
-    'req-body':
-    {
-        'kdc-options': (b'@\x81\x00\x10', 32),
-        'cname':
-        {
-            'name-type': 1,
-            'name-string': ['charlie']
-        },
-        'realm': 'CSEC',
-        'sname':
-        {
-            'name-type': 2,
-            'name-string': ['krbtgt', 'CSEC']
-        },
-        'till': datetime.datetime(2037, 9, 13, 2, 48, 5),
-        'rtime': datetime.datetime(2037, 9, 13, 2, 48, 5),
-        'nonce': 437529603,
+    'pvno': 5,
+    'req-body': {
+        'addresses': [{'addr-type': 20, 'address': b'DESKTOP-VI4396B '}],
+        'cname': {'name-string': ['charlie'], 'name-type': 1},
         'etype': [23],
-        'addresses':
-        [
-            {
-                'addr-type': 20,
-                'address': b'DESKTOP-VI4396B '
-            }
-        ]
+        'kdc-options': (b'@\x81\x00\x10', 32),
+        'nonce': 0,
+        'realm': 'CSEC',
+        'rtime': datetime.datetime(2037, 9, 13, 2, 48, 5),
+        'sname': {'name-string': ['krbtgt', 'CSEC'], 'name-type': 2},
+        'till': datetime.datetime(2037, 9, 13, 2, 48, 5)
     }
 }
-tgs_req_template = {}
-krb5 = asn1tools.compile_files('krb5.asn', 'der')
-print(krb5.decode(MESSAGE_TYPES[as_req_data[0]], as_req_data))
-exit()
+
+TGS_REQ_TEMPLATE = {
+    'msg-type': 12,
+    'padata':
+    [
+        {
+            'padata-type': 1, # PA-DATA pA-TGS-REQ
+            'padata-value':
+            {
+                'ap-options': (b'\x00\x00\x00\x00', 32),
+                'authenticator':
+                {
+                    'cipher': # Field's value encrypted with session key from AS-REP
+                    {
+                        'authenticator-vno': 5,
+                        'cname': {'name-string': ['charlie'], 'name-type': 1},
+                        'crealm': 'CSEC.472.LAB1',
+                        'ctime': datetime.datetime.now(),
+                        'cusec': 0,
+                        'seq-number': 0
+                    },
+                    'etype': 23
+                },
+                'msg-type': 14,
+                'pvno': 5,
+                'ticket': # TGT Copied from AS-REP
+                {
+                    'enc-part':
+                    {
+                        'cipher': b'',
+                        'etype': 23,
+                        'kvno': 2
+                    },
+                    'realm': 'CSEC.472.LAB1',
+                    'sname':
+                    {
+                        'name-string': ['krbtgt', 'CSEC.472.LAB1'],
+                        'name-type': 2
+                    },
+                    'tkt-vno': 5
+                }
+            }
+        },
+        {
+            'padata-type': 167, # PA-DATA pA-PAC-OPTIONS
+            'padata-value': b'0\t\xa0\x07\x03\x05\x00@\x00\x00\x00'
+        }
+    ],
+    'pvno': 5,
+    'req-body':
+    {
+        'etype': [23],
+        'kdc-options': (b'@\x81\x00\x00', 32),
+        'nonce': 0,
+        'realm': 'CSEC.472.LAB1',
+        'sname': {'name-string': ['cifs', 'FILESERVER'], 'name-type': 2},
+        'till': datetime.datetime(2037, 9, 13, 2, 48, 5)
+    }
+}
+
+AP_REQ_TEMPLATE = {
+    'ap-options': (b' \x00\x00\x00', 32),
+    'authenticator':
+    {
+        'cipher': # Field's value encrypted with session key from TGS-REP T=11
+        {
+            'authenticator-vno': 5,
+            # 'authorization-data':
+            # [
+            #     {
+            #         'ad-data': b'0g0\x0f\xa0\x04\x02\x02\x00\x81\xa1\x07'
+            #                    b'\x04\x050\x03\x02\x01\x170'
+            #                    b'\x0e\xa0\x04\x02\x02\x00\x8f\xa1'
+            #                    b'\x06\x04\x04\x00@\x00\x000D\xa0\x04\x02'
+            #                    b'\x02\x00\x90\xa1<\x04:c\x00i\x00f'
+            #                    b'\x00s\x00/\x00F\x00I\x00L\x00E\x00S\x00E'
+            #                    b'\x00R\x00V\x00E\x00R\x00@\x00C\x00S\x00E'
+            #                    b'\x00C\x00.\x004\x007\x002\x00.\x00L\x00A'
+            #                    b'\x00B\x001\x00',
+            #         'ad-type': 1
+            #     }
+            # ],
+            'cksum':
+            {
+                'checksum': b'\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+                            b'\x00\x00\x00\x00\x00\x00\x00\x00"\x00\x00\x00',
+                'cksumtype': 32771
+            },
+            'cname': {'name-string': ['charlie'], 'name-type': 1},
+            'crealm': 'CSEC.472.LAB1',
+            'ctime': datetime.datetime.now(),
+            'cusec': 0,
+            'seq-number': 0,
+            'subkey':
+            {
+                'keytype': 23,
+                'keyvalue': b''
+            }
+        },
+        'etype': 23
+    },
+    'msg-type': 14,
+    'pvno': 5,
+    'ticket': # Auth Ticket Copied from TGS-REP
+    {
+        'enc-part':
+        {
+            'cipher': b'',
+            'etype': 23,
+            'kvno': 1
+        },
+        'realm': 'CSEC.472.LAB1',
+        'sname': {'name-string': ['cifs', 'FILESERVER'], 'name-type': 2},
+        'tkt-vno': 5
+    }
+}
+
+
+class RC4_HMAC_MD5:
+    def __init__(self):
+        self.__handle = crypto._RC4()
+
+    def encrypt(self, T: int, data: bytes, key: str, nonce: bytes | None = None) -> tuple[bytes, bytes]:
+        if isinstance(key, str):
+            key = crypto._RC4().string_to_key(key, '', None)
+        elif isinstance(key, bytes):
+            tmp = crypto._RC4().string_to_key('', '', None)
+            tmp.contents = key
+            key = tmp
+        return self.__handle.encrypt(key, T, data, nonce)
+
+    def decrypt(self, data: bytes, key: str | bytes) -> bytes:
+        if isinstance(key, str):
+            key = crypto._RC4().string_to_key(key, '', None)
+        elif isinstance(key, bytes):
+            tmp = crypto._RC4().string_to_key('', '', None)
+            tmp.contents = key
+            key = tmp
+
+        T = 1
+        while T < 16:
+            try:
+                return self.__handle.decrypt(key, T, data)
+            except crypto.InvalidChecksum:
+                T += 1
+        raise crypto.InvalidChecksum('Failed to decrypt data')
+
+
+def is_PAC_required(username, krb_host_addr):
+    # Send init packet
+    # Checks if PAC is required
+    as_init = dict(AS_REQ_TEMPLATE)
+    as_init['req-body']['cname']['name-string'] = [username]
+    del as_init['padata']
+
+    packet_data = ASN1_KRB5.encode('AS-REQ', as_init)
+    packet_data = len(packet_data).to_bytes(4, 'big') + packet_data
+
+    socket = scapy.socket.socket(scapy.socket.AF_INET, scapy.socket.SOCK_STREAM)
+    socket.connect(krb_host_addr)
+    print('Sending init packet...')
+    socket.send(packet_data)
+    as_rep_err = socket.recv(8192)
+    if len(as_rep_err) > 4:
+        if as_rep_err[4] == 0x7E:
+            return True
+        return False
+    else:
+        return True
+
+def get_TGT(username, password, nonce, cipher, krb_host_addr):
+    as_req = dict(AS_REQ_TEMPLATE)
+    now =  datetime.datetime.now()
+    now = (now - datetime.timedelta(microseconds=now.microsecond))
+    now = (now + datetime.timedelta(hours=5))
+    as_req['padata'][0]['padata-value']['cipher']['patimestamp'] = now
+    as_req['padata'][0]['padata-value']['cipher'] = ASN1_KRB5.encode('PA-ENC-TS-ENC', as_req['padata'][0]['padata-value']['cipher'])
+    as_req['padata'][0]['padata-value']['cipher'] = cipher.encrypt(1, as_req['padata'][0]['padata-value']['cipher'], password)
+    as_req['padata'][0]['padata-value'] = ASN1_KRB5.encode('PA-ENC-TIMESTAMP', as_req['padata'][0]['padata-value'])
+
+    as_req['req-body']['cname']['name-string'] = [username]
+    as_req['req-body']['nonce'] = nonce
+    packet_data = ASN1_KRB5.encode('AS-REQ', AS_REQ_TEMPLATE)
+    packet_data = len(packet_data).to_bytes(4, 'big') + packet_data
+
+    socket = scapy.socket.socket(scapy.socket.AF_INET, scapy.socket.SOCK_STREAM)
+    socket.connect(krb_host_addr)
+    socket.send(packet_data)
+    as_rep = socket.recv(8192)
+    as_rep = ASN1_KRB5.decode(MESSAGE_TYPES[as_rep[4]], as_rep[4:])
+    ticket_granting_ticket = as_rep['ticket']
+    enc_client_tgs_key = as_rep['enc-part']['cipher']
+    client_tgs_key = ASN1_KRB5.decode('EncASRepPart', cipher.decrypt(enc_client_tgs_key, password))['key']['keyvalue']
+    return ticket_granting_ticket, client_tgs_key
+
+
+def get_ST(username, nonce, cipher, krb_host_addr, ticket_granting_ticket, client_tgs_key):
+    tgs_req = dict(TGS_REQ_TEMPLATE)
+    tgs_req['padata'][0]['padata-value']['ticket'] = ticket_granting_ticket
+    now =  datetime.datetime.now()
+    now_microsec = now.microsecond
+    now = (now - datetime.timedelta(microseconds=now.microsecond))
+    now = (now + datetime.timedelta(hours=5))
+    tgs_req['padata'][0]['padata-value']['authenticator']['cipher']['ctime'] = now
+    tgs_req['padata'][0]['padata-value']['authenticator']['cipher']['cusec'] = now_microsec
+    tgs_req['padata'][0]['padata-value']['authenticator']['cipher']['seq-number'] = nonce + 1
+    tgs_req['padata'][0]['padata-value']['authenticator']['cipher']['cname']['name-string'] = [username]
+
+    tgs_req['padata'][0]['padata-value']['authenticator']['cipher'] = cipher.encrypt(7, ASN1_KRB5.encode('Authenticator', tgs_req['padata'][0]['padata-value']['authenticator']['cipher']), client_tgs_key)
+    tgs_req['padata'][0]['padata-value'] = ASN1_KRB5.encode('AP-REQ', tgs_req['padata'][0]['padata-value'])
+
+    tgs_req['req-body']['nonce'] = nonce + 1
+
+    packet_data = ASN1_KRB5.encode('TGS-REQ', tgs_req)
+    packet_data = len(packet_data).to_bytes(4, 'big') + packet_data
+    socket = scapy.socket.socket(scapy.socket.AF_INET, scapy.socket.SOCK_STREAM)
+    socket.connect(krb_host_addr)
+    socket.send(packet_data)
+    tgs_rep = socket.recv(8192)
+    tgs_rep = ASN1_KRB5.decode(MESSAGE_TYPES[tgs_rep[4]], tgs_rep[4:])
+    service_ticket = tgs_rep['ticket']
+    enc_client_service_key = tgs_rep['enc-part']['cipher']
+    client_service_key = ASN1_KRB5.decode('EncTGSRepPart', cipher.decrypt(enc_client_service_key, client_tgs_key))['key']['keyvalue']
+    return service_ticket, client_service_key
+
+
+def build_AP_REQ(username, nonce, cipher, service_ticket, client_service_key):
+    ap_req = dict(AP_REQ_TEMPLATE)
+    ap_req['ticket'] = service_ticket
+    now =  datetime.datetime.now()
+    now_microsec = now.microsecond
+    now = (now - datetime.timedelta(microseconds=now.microsecond))
+    now = (now + datetime.timedelta(hours=5))
+    ap_req['authenticator']['cipher']['ctime'] = now
+    ap_req['authenticator']['cipher']['cusec'] = now_microsec
+    ap_req['authenticator']['cipher']['seq-number'] = nonce + 2
+    ap_req['authenticator']['cipher']['cname']['name-string'] = [username]
+    client_service_subkey = crypto.get_random_bytes(16)
+    ap_req['authenticator']['cipher']['subkey']['keyvalue'] = client_service_subkey
+    ap_req_raw = dict(ap_req)
+
+    ap_req['authenticator']['cipher'] = cipher.encrypt(7, ASN1_KRB5.encode('Authenticator', ap_req['authenticator']['cipher']), client_service_key)
+    packet_data = ASN1_KRB5.encode('AP-REQ', ap_req)
+    return ap_req_raw, packet_data, client_service_subkey
+
+
+def generate_auth_payload(username, password, nonce, cipher, krb_host_addr):
+    do_pac = is_PAC_required(username, krb_host_addr)
+    print(f'PAC Required: {do_pac}')
+    if not do_pac:
+        raise NotImplementedError("Auth w/o PAC not supported.")
+
+    print('Sending AS-REQ...')
+    tgt, ctgs_key = get_TGT(username, password, nonce, cipher, krb_host_addr)
+    print('Recieved AS-REP')
+    print(f'\tClient/TGS Session Key: {ctgs_key.hex()}')
+    print(f'\tTicket Granting Ticket: {tgt['enc-part']['cipher'].hex()[:20]}...')
+
+    print('Sending TGS-REQ...')
+    st, cs_key = get_ST(username, nonce, cipher, krb_host_addr, tgt, ctgs_key)
+    print('Recieved TGS-REP')
+    print(f'\tClient/Service Session Key: {cs_key.hex()}')
+    print(f'\tService Ticket: {st['enc-part']['cipher'].hex()[:20]}...')
+
+    print('Generating AP-REQ...')
+    ap_req_data, ap_req_payload, cs_subkey = build_AP_REQ(username, nonce, cipher, st, cs_key)
+    print('Generated AP-REQ')
+    print(f'\tClient/Service Session Subkey: {cs_subkey.hex()}')
+    print(f'\tAP-REQ Payload: {ap_req_payload.hex()[:20]}...')
+    print()
+    print(f'AP-REQ Data:')
+    pprint(ap_req_data)
+    return ap_req_data, ap_req_payload, cs_key, cs_subkey
+
 
 def main():
-    ...
+    username = 'charlie'
+    password = 'NewStudent123'
+    nonce = 0x0a + int(crypto.get_random_bytes(3).hex(), 16)
+    rc4 = RC4_HMAC_MD5()
+    krb_host_addr = ('192.168.1.103', 88)
+    ap_req_data, ap_req_payload, cs_key, cs_subkey = generate_auth_payload(username, password, nonce, rc4, krb_host_addr)
 
 
 if __name__ == '__main__':
     main()
-
-
-client_GUID = b'\xd6\x19\x6b\xc6\xcf\x94\x11\xee\x91\x91\x00\x50\x56\xb0\xf2\xfa'
-client_GUID = b'\xd6\x19\x6b\xdb\xcf\x94\x11\xee\x91\x91\x00\x50\x56\xb0\xf2\xfa'
-smb_proto_neg_1 = b'\x00\x00\x00\x9b\xff\x53\x4d\x42\x72\x00\x00\x00\x00\x18\x53\xc8\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xfe\x00\x00\x00\x00\x00\x78\x00\x02\x50\x43\x20\x4e\x45\x54\x57\x4f\x52\x4b\x20\x50\x52\x4f\x47\x52\x41\x4d\x20\x31\x2e\x30\x00\x02\x4c\x41\x4e\x4d\x41\x4e\x31\x2e\x30\x00\x02\x57\x69\x6e\x64\x6f\x77\x73\x20\x66\x6f\x72\x20\x57\x6f\x72\x6b\x67\x72\x6f\x75\x70\x73\x20\x33\x2e\x31\x61\x00\x02\x4c\x4d\x31\x2e\x32\x58\x30\x30\x32\x00\x02\x4c\x41\x4e\x4d\x41\x4e\x32\x2e\x31\x00\x02\x4e\x54\x20\x4c\x4d\x20\x30\x2e\x31\x32\x00\x02\x53\x4d\x42\x20\x32\x2e\x30\x30\x32\x00\x02\x53\x4d\x42\x20\x32\x2e\x3f\x3f\x3f\x00'
-smb_proto_neg_2 = bytes(f'\x00\x00\x00\xe4\xfe\x53\x4d\x42\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\xff\xfe\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x24\x00\x05\x00\x01\x00\x00\x00\x7f\x00\x00\x00\xc6\x6b\x19{client_GUID}\x70\x00\x00\x00\x04\x00\x00\x00\x02\x02\x10\x02\x00\x03\x02\x03\x11\x03\x00\x00\x01\x00\x26\x00\x00\x00\x00\x00\x01\x00\x20\x00\x01\x00\x3a\x73\x72\x67\xfe\xc1\xe2\xa2\x7b\xcd\x31\xf0\xf8\x13\xfd\x94\x19\xc1\x63\x96\x88\x9b\x53\xf6\x5c\x60\x7b\xbc\xd4\xf5\x80\x74\x00\x00\x02\x00\x06\x00\x00\x00\x00\x00\x02\x00\x02\x00\x01\x00\x00\x00\x03\x00\x10\x00\x00\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x04\x00\x02\x00\x03\x00\x01\x00\x05\x00\x14\x00\x00\x00\x00\x00\x46\x00\x49\x00\x4c\x00\x45\x00\x53\x00\x45\x00\x52\x00\x56\x00\x45\x00\x52\x00')
-
-username = 'charlie'
-password = 'NewStudent123'
-password_hash = ''
-domain = 'CSEC'
-krb_addr = ('192.168.1.103', 88)
-ss_addr = ('192.168.1.104', 445)
